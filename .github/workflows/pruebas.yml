@@ -1,0 +1,13 @@
+name: Pruebas Redis
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  taller:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose up --build -d --wait
+      - run: docker compose exec -T app npm test
+      - run: docker compose exec -T app node tests/integration.js
+      - run: docker compose exec -T app npm run benchmark
+      - if: always()
+        run: docker compose logs && docker compose down
