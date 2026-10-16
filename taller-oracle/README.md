@@ -144,6 +144,20 @@ Sal con Ctrl+C. Consulta el guion ampliado en [GUIA-SESIONES-PUBSUB.md](GUIA-SES
 
 ## Pruebas automáticas
 
+### Consultar cualquier producto con dos scripts separados
+
+Estos scripts usan directamente las credenciales locales de .env; no necesitan iniciar la API ni hacer login web. Oracle debe estar iniciado y, para el segundo script, también Redis (`docker compose up -d`).
+
+```bash
+node consultar-sin-redis.js 4
+node consultar-con-redis.js 4 --vaciar
+node consultar-con-redis.js 4
+```
+
+El primer comando consulta Oracle sin conectarse a Redis. El segundo elimina solo la clave de prueba del producto 4 y demuestra un MISS. El tercero, ejecutado antes de 20 segundos, demuestra un HIT sin abrir conexión a Oracle. Sustituye 4 por cualquier ID existente en TALLER_PRODUCTOS. Si no existe, lo informa y no guarda una copia. Espera más de 20 segundos y repite para demostrar la expiración.
+
+Se usa el espacio de claves `taller:cli:producto:ID` para no modificar la caché de la página. Los tiempos incluyen abrir conexiones: Oracle en el primer script; Redis y, si es MISS, Oracle en el segundo. Se excluyen la invalidación opcional y la consulta informativa del TTL. No equivalen al benchmark de la API, que reutiliza conexiones. Para una comparación con conexiones reutilizadas usa los siguientes comandos.
+
 Con el servidor iniciado, abre otra terminal en la misma carpeta:
 
 ```bash
@@ -211,3 +225,4 @@ Redis no tiene volumen persistente: al recrear el contenedor pueden perderse ses
 - [Redis cache-aside con Node.js](https://redis.io/docs/latest/develop/use-cases/cache-aside/nodejs/)
 - [Redis Pub/Sub con Node.js](https://redis.io/docs/latest/develop/use-cases/pub-sub/nodejs/)
 - [Conexiones node-oracledb](https://node-oracledb.readthedocs.io/en/stable/user_guide/connection_handling.html)
+
