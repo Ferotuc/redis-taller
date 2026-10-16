@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Taller Redis · Productos</title>
+<style>
+body{font:16px system-ui;background:#101726;color:#e9eef8;margin:0;padding:40px 20px}main{max-width:1000px;margin:auto}h1{font-size:42px;margin-bottom:10px}p{line-height:1.6;color:#b9c6da}.tag{color:#ff7777;font-weight:bold}section{background:#1b2639;padding:24px;border-radius:16px;margin:24px 0}button,select{font:inherit;border:0;border-radius:8px;padding:12px;margin:5px;background:#344761;color:white;cursor:pointer}button.primary{background:#c73740}button:disabled{opacity:.5}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:12px;border-bottom:1px solid #344761}pre{white-space:pre-wrap;color:#8ee1b5}#estado{color:#ffd085}.scroll{overflow:auto}
+[hidden]{display:none!important}input{font:inherit;padding:12px;border:1px solid #526783;border-radius:8px;background:#101726;color:white;margin:6px;max-width:90%}label{display:inline-block}#notificaciones li{padding:10px;color:#8ee1b5}#barra-sesion{background:#1b2639;border-radius:12px;padding:12px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap}#mensaje-login,#resultado-producto{color:#ffd085}
+</style>
+<main><span class="tag">NODE.JS + ORACLE + REDIS</span><h1>Caché y procesamiento rápido</h1>
+<section id="acceso"><h2>Iniciar sesión</h2><p>Las credenciales se verifican en Oracle. Redis mantiene la sesión durante 60 segundos de inactividad.</p><form id="form-login"><label>Usuario<br><input id="usuario" autocomplete="username" required maxlength="50"></label><label>Contraseña<br><input id="password" type="password" autocomplete="current-password" required maxlength="128"></label><button id="entrar" class="primary">Ingresar</button></form><p id="mensaje-login" role="status"></p></section>
+<div id="barra-sesion" hidden><span>Usuario: <b id="usuario-actual"></b> · Sesión en Redis: <b id="tiempo-sesion">60 s</b></span><button id="salir">Cerrar sesión</button></div>
+<div id="app" hidden>
+<p>Consulta productos almacenados en Oracle y compara las consultas directas con la caché en Redis. Los tiempos se miden en cada solicitud, sin demoras artificiales. Con una tabla pequeña y una base local, Redis no necesariamente será más rápido.</p>
+<section><label>Consulta <select id="modo"><option value="producto">Producto individual</option><option value="reporte">Reporte por categoría (productos_prueba)</option></select></label><br><label>Producto <select id="producto"><option value="">Cargando productos de Oracle…</option></select></label><br>
+<button id="sin">Consultar sin Redis</button><button id="con" class="primary">Consultar con Redis</button><button id="borrar">Vaciar caché de la consulta</button><button id="comparar">Comparar 5 consultas por modo</button>
+<p id="estado" role="status">Primero consulta sin Redis. Después pulsa dos veces “Consultar con Redis”.</p><pre id="detalle"></pre><div class="scroll" id="tabla-reporte"></div></section>
+<section class="scroll"><h2>Resultados reales de esta ejecución</h2><table><thead><tr><th>#</th><th>Origen</th><th>Servidor (ms)</th><th>HTTP (ms)</th><th>TTL (s)</th></tr></thead><tbody id="filas"></tbody></table><p id="resumen"></p></section>
+<p><b>HIT:</b> el dato ya está en Redis. <b>MISS:</b> se consulta la fuente y se guarda una copia. <b>TTL:</b> al llegar a cero, la copia caduca; la siguiente consulta vuelve a la fuente. El TTL mostrado corresponde al momento de consultar.</p>
+<section><h2>Agregar producto y publicar un aviso</h2><p>Abre otra ventana o navegador e inicia sesión. Al guardar aquí, la API publica en Redis Pub/Sub y las ventanas conectadas reciben el aviso mediante SSE. Estos productos se agregan al catálogo, no a la tabla de 100,000 registros del reporte.</p><form id="form-producto"><label>Nombre<br><input id="nuevo-nombre" required maxlength="80" placeholder="Ej. Adaptador USB-C"></label><label>Precio (Q)<br><input id="nuevo-precio" type="number" min="0" max="99999999.99" step="0.01" required></label><button id="guardar-producto" class="primary">Guardar y publicar</button></form><p id="resultado-producto" role="status"></p><h3>Notificaciones en vivo</h3><p id="estado-eventos" role="status">Conectando…</p><ul id="notificaciones" aria-live="polite"></ul></section>
+<p><b>Sesiones:</b> interactuar con la página renueva el TTL de 60 segundos; al dejar de usarla se cierra la sesión. Los avisos automáticos no la renuevan. <b>Pub/Sub:</b> distribuye los eventos de productos; solo llegan a clientes conectados y no se conserva historial.</p></div></main>
+<script src="/sesion.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let n = 0;
+function ruta() { return $('modo').value === 'reporte' ? '/api/reporte' : `/api/productos/${$('producto').value}`; }
+$('modo').onchange = () => {
+  $('filas').replaceChildren(); n = 0;
+  $('resumen').textContent = ''; $('detalle').textContent = '';
+  $('tabla-reporte').replaceChildren();
+  $('estado').textContent = $('modo').value === 'reporte' ? 'El reporte agrupa todos los registros de productos_prueba. Consulta sin Redis y después con Redis.' : 'Consulta el producto seleccionado.';
+};
+async function cargarProductos() {
+  document.querySelectorAll('#sin,#con,#borrar,#comparar,#producto,#modo').forEach(b => b.disabled = true);
+  try {
+    const r = await apiFetch('/api/productos');
+    const data = await r.json();
+    if (!r.ok) throw Error(data.error);
+    if (!data.productos.length) throw Error('No hay productos en Oracle.');
+    const anterior = $('producto').value;
+    $('producto').replaceChildren(...data.productos.map(p => {
+      const option = document.createElement('option');
+      option.value = p.id;
+      option.textContent = `${p.nombre} — Q ${Number(p.precio).toLocaleString('es-GT')}`;
+      return option;
+    }));
+    if (data.productos.some(p => String(p.id) === anterior)) $('producto').value = anterior;
+    document.querySelectorAll('#sin,#con,#borrar,#comparar,#producto,#modo').forEach(b => b.disabled = false);
+  } catch (e) { $('estado').textContent = `No se pudieron cargar los productos: ${e.message}`; }
+}
+window.onSesionIniciada = cargarProductos;
+window.onProductosActualizados = cargarProductos;
+async function consulta(cache) {
+  const start = performance.now();
+  const r = await apiFetch(`${ruta()}?cache=${cache}`);
+  const data = await r.json();
+  const httpMs = performance.now() - start;
+  if (!r.ok) throw Error(data.error);
+  const row = $('filas').insertRow();
+  for (const value of [++n, data.origen, data.tiempoServidorMs, httpMs.toFixed(3), data.ttlSegundos ?? '—']) row.insertCell().textContent = value;
+  $('tabla-reporte').replaceChildren();
+  if (data.reporte) {
+    $('detalle').textContent = `Reporte: ${data.reporte.length} categorías; ${data.reporte.reduce((s,r) => s+r.cantidad_productos,0).toLocaleString('es-GT')} productos procesados en Oracle al calcularlo.`;
+    const table = document.createElement('table');
+    const head = table.createTHead().insertRow();
+    for (const label of ['Categoría','Productos','Precio promedio (Q)','Unidades','Valor inventario (Q)']) {
+      const th = document.createElement('th'); th.textContent = label; head.append(th);
+    }
+    const body = table.createTBody();
+    for (const item of data.reporte) {
+      const tr = body.insertRow();
+      for (const key of ['categoria','cantidad_productos','precio_promedio','unidades','valor_inventario']) tr.insertCell().textContent = Number(item[key]).toLocaleString('es-GT');
+    }
+    $('tabla-reporte').append(table);
+  } else { $('detalle').textContent = JSON.stringify(data.producto, null, 2); }
+  $('estado').textContent = data.origen;
+  return data;
+}
+async function borrar() {
+  const r = await apiFetch(ruta(), {method:'DELETE'});
+  const data = await r.json();
+  if (!r.ok) throw Error(data.error);
+  $('estado').textContent = data.mensaje;
+}
+async function run(fn) {
+  document.querySelectorAll('#sin,#con,#borrar,#comparar,#producto,#modo').forEach(b => b.disabled = true);
+  try { await fn(); } catch(e) { $('estado').textContent = e.message; }
+  finally { document.querySelectorAll('#sin,#con,#borrar,#comparar,#producto,#modo').forEach(b => b.disabled = false); }
+}
+$('sin').onclick = () => run(() => consulta(0));
+$('con').onclick = () => run(() => consulta(1));
+$('borrar').onclick = () => run(borrar);
+$('comparar').onclick = () => run(async () => {
+  $('resumen').textContent = '';
+  await borrar();
+  const sin = [], con = [];
+  for(let i=0;i<5;i++) sin.push((await consulta(0)).tiempoServidorMs);
+  const primera = await consulta(1);
+  for(let i=0;i<5;i++) {
+    const dato = await consulta(1);
+    if (!dato.origen.includes('HIT')) throw Error('La caché expiró durante la comparación. Repite la prueba.');
+    con.push(dato.tiempoServidorMs);
+  }
+  const media = a => a.reduce((x,y) => x+y,0)/a.length;
+  $('resumen').textContent = `Promedio sin caché: ${media(sin).toFixed(3)} ms. Primera consulta con caché (MISS): ${primera.tiempoServidorMs} ms. Promedio de 5 HIT: ${media(con).toFixed(3)} ms. Reducción: ${(100*(1-media(con)/media(sin))).toFixed(2)} %. Medidas del servidor; el MISS se informa por separado.`;
+});
+</script></html>

@@ -1,6 +1,21 @@
 name: Pruebas Redis
 on: [push, pull_request, workflow_dispatch]
 jobs:
+  oracle-sintaxis:
+    name: Instalar y revisar versión Oracle (sin base de datos)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: taller-oracle
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: taller-oracle/package-lock.json
+      - run: npm ci
+      - run: for file in *.js; do node --check "$file" || exit 1; done
   taller:
     runs-on: ubuntu-latest
     steps:
